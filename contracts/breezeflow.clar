@@ -7,6 +7,8 @@
 (define-constant err-unauthorized (err u102))
 (define-constant err-invalid-rating (err u103))
 (define-constant err-invalid-temperature (err u104))
+(define-constant err-invalid-input (err u105))
+(define-constant err-already-voted (err u106))
 
 ;; Data Variables
 (define-map authorized-oracles principal bool)
@@ -24,12 +26,22 @@
     ratings: uint,
     total-votes: uint })
 
+(define-map voter-records
+  { voter: principal,
+    location: (string-ascii 64),
+    condition: (string-ascii 32) }
+  { voted: bool })
+
 ;; Events
 (define-data-var last-event-id uint u0)
 (define-map events 
   { id: uint }
   { event-type: (string-ascii 32),
     data: (string-ascii 256) })
+
+;; Input Validation
+(define-private (validate-string (input (string-ascii 64)))
+  (> (len input) u0))
 
 ;; Authorization Functions
 (define-public (add-oracle (oracle principal))
@@ -48,6 +60,8 @@
 
 (define-public (submit-weather (location (string-ascii 64)) (temperature int) (conditions (string-ascii 32)))
   (begin
+    (asserts! (validate-string location) err-invalid-input)
+    (asserts! (validate-string conditions) err-invalid-input)
     (asserts! (is-authorized tx-sender) err-unauthorized)
     (asserts! (validate-temperature temperature) err-invalid-temperature)
     (map-set weather-data
@@ -61,18 +75,29 @@
 
 ;; Activity Functions
 (define-public (add-activity (location (string-ascii 64)) (condition (string-ascii 32)) (activity (string-ascii 64)))
-  (let ((current-activities (default-to { suggestions: (list), ratings: u0, total-votes: u0 }
+  (begin
+    (asserts! (validate-string location) err-invalid-input)
+    (asserts! (validate-string condition) err-invalid-input)
+    (asserts! (validate-string activity) err-invalid-input)
+    (let ((current-activities (default-to { suggestions: (list), ratings: u0, total-votes: u0 }
           (map-get? activities { location: location, condition: condition }))))
-    (ok (map-set activities
-      { location: location, condition: condition }
-      { suggestions: (append (get suggestions current-activities) activity),
-        ratings: (get ratings current-activities),
-        total-votes: (get total-votes current-activities) }))))
+      (ok (map-set activities
+        { location: location, condition: condition }
+        { suggestions: (append (get suggestions current-activities) activity),
+          ratings: (get ratings current-activities),
+          total-votes: (get total-votes current-activities) })))))
 
 (define-public (rate-activity (location (string-ascii 64)) (condition (string-ascii 32)) (rating uint))
   (begin
+    (asserts! (validate-string location) err-invalid-input)
+    (asserts! (validate-string condition) err-invalid-input)
     (asserts! (<= rating u5) err-invalid-rating)
+    (asserts! (is-none (map-get? voter-records 
+      { voter: tx-sender, location: location, condition: condition })) err-already-voted)
     (let ((current-data (unwrap! (map-get? activities { location: location, condition: condition }) err-invalid-weather)))
+      (map-set voter-records
+        { voter: tx-sender, location: location, condition: condition }
+        { voted: true })
       (ok (map-set activities
         { location: location, condition: condition }
         { suggestions: (get suggestions current-data),
@@ -90,7 +115,9 @@
   (let ((activity-data (map-get? activities { location: location, condition: condition })))
     (if (is-some activity-data)
       (let ((data (unwrap-panic activity-data)))
-        (ok (/ (get ratings data) (get total-votes data))))
+        (if (> (get total-votes data) u0)
+          (ok (/ (get ratings data) (get total-votes data)))
+          (ok u0)))
       (err err-invalid-weather))))
 
 ;; Private Functions
