@@ -35,13 +35,19 @@ Clarinet.test({
     const deployer = accounts.get("deployer")!;
     const oracle = accounts.get("wallet_1")!;
     
-    // Add oracle first
     chain.mineBlock([
       Tx.contractCall("breezeflow", "add-oracle", 
         [types.principal(oracle.address)], deployer.address)
     ]);
     
     let block = chain.mineBlock([
+      Tx.contractCall("breezeflow", "submit-weather", 
+        ["", types.int(75), "Sunny"], oracle.address)
+    ]);
+    
+    assertEquals(block.receipts[0].result, `(err u105)`);
+    
+    block = chain.mineBlock([
       Tx.contractCall("breezeflow", "submit-weather", 
         ["New York", types.int(200), "Sunny"], oracle.address)
     ]);
@@ -51,7 +57,7 @@ Clarinet.test({
 });
 
 Clarinet.test({
-  name: "Ensures activity rating system works",
+  name: "Prevents duplicate voting on activities",
   async fn(chain: Chain, accounts: Map<string, Account>) {
     const deployer = accounts.get("deployer")!;
     
@@ -62,7 +68,13 @@ Clarinet.test({
         ["New York", "Sunny", types.uint(5)], deployer.address)
     ]);
     
-    assertEquals(block.receipts.length, 2);
     assertEquals(block.receipts[1].result, '(ok true)');
+    
+    block = chain.mineBlock([
+      Tx.contractCall("breezeflow", "rate-activity",
+        ["New York", "Sunny", types.uint(4)], deployer.address)
+    ]);
+    
+    assertEquals(block.receipts[0].result, `(err u106)`);
   },
 });
